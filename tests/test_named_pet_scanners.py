@@ -184,12 +184,131 @@ def test_discovery_mi_rejects_unsupported_ring_counts(xp, dev):
 
 
 @pytest.mark.parametrize(
+    "scanner_class,num_rings,faces,crystals,radius,pitch",
+    [
+        (pps.SiemensMCTPETScannerGeometry, 52, 48, 13, 437.2, 4.01),
+        (pps.SiemensVisionQuadraPETScannerGeometry, 320, 38, 20, 417.0, 3.2),
+        (pps.SiemensInveonPETScannerGeometry, 80, 16, 20, 85.08, 1.63),
+        (pps.UnitedImagingUExplorerPETScannerGeometry, 672, 24, 35, 402.05, 2.85),
+    ],
+)
+def test_additional_flat_block_scanners(
+    xp, dev, scanner_class, num_rings, faces, crystals, radius, pitch
+):
+    scanner = scanner_class(xp, dev)
+    assert scanner.num_rings == num_rings
+    assert scanner.num_sides == faces
+    assert scanner.num_lor_endpoints_per_ring == faces * crystals
+    face = parallelproj.to_numpy_array(scanner.all_lor_endpoints[:crystals])
+    np.testing.assert_allclose(face[:, 1], -radius, atol=1e-4)
+    np.testing.assert_allclose(np.diff(face[:, 0]), pitch, atol=2e-5)
+    assert not parallelproj.to_numpy_array(scanner.virtual_ring_mask).any()
+
+
+@pytest.mark.parametrize(
+    "scanner_class,rings,detectors,radius,pitch",
+    [
+        (pps.GESignaPETMRScannerGeometry, 45, 448, 320.3, 5.56),
+        (pps.SiemensHRRTPETScannerGeometry, 104, 576, 241.765, 2.4375),
+    ],
+)
+def test_additional_cylindrical_scanners(
+    xp, dev, scanner_class, rings, detectors, radius, pitch
+):
+    scanner = scanner_class(xp, dev)
+    assert scanner.num_rings == rings
+    assert scanner.num_lor_endpoints_per_ring == detectors
+    assert scanner.radius == pytest.approx(radius)
+    positions = parallelproj.to_numpy_array(scanner.ring_positions)
+    np.testing.assert_allclose(
+        positions, pitch * (np.arange(rings) - (rings - 1) / 2), atol=3e-5
+    )
+
+
+@pytest.mark.parametrize(
+    "scanner_class,virtual_rings,period",
+    [
+        (pps.SiemensMCTPETScannerGeometry, [13, 27, 41], 14),
+        (pps.SiemensVisionQuadraPETScannerGeometry, [80, 161, 242], 21),
+    ],
+)
+def test_virtual_axial_and_transaxial_positions(
+    xp, dev, scanner_class, virtual_rings, period
+):
+    scanner = scanner_class(xp, dev, model="cylindrical")
+    axial = parallelproj.to_numpy_array(scanner.virtual_ring_mask)
+    transaxial = parallelproj.to_numpy_array(scanner.virtual_lor_endpoint_mask)
+    np.testing.assert_array_equal(np.flatnonzero(axial), virtual_rings)
+    np.testing.assert_array_equal(transaxial, np.arange(transaxial.size) % period == 0)
+    all_mask = parallelproj.to_numpy_array(scanner.all_virtual_lor_endpoint_mask)
+    np.testing.assert_array_equal(
+        all_mask.reshape(scanner.num_rings, -1), axial[:, None] | transaxial[None, :]
+    )
+
+
+def test_quadra_physical_rings_match_nonvirtual_logical_rings(xp, dev):
+    physical = pps.SiemensVisionQuadraPETScannerGeometry(xp, dev)
+    logical = pps.SiemensVisionQuadraPETScannerGeometry(xp, dev, model="cylindrical")
+    np.testing.assert_allclose(
+        parallelproj.to_numpy_array(physical.ring_positions),
+        parallelproj.to_numpy_array(logical.ring_positions)[
+            ~parallelproj.to_numpy_array(logical.virtual_ring_mask)
+        ],
+        atol=1e-5,
+    )
+
+
+@pytest.mark.parametrize(
+    "scanner_class,faces,crystals,radius,trans_pitch,axial_pitch",
+    [
+        (pps.SiemensVision600PETScannerGeometry, 38, 20, 420.0, 3.2, 3.2),
+        (pps.GEDiscovery690PETScannerGeometry, 32, 18, 417.6, 4.2, 6.3),
+    ],
+)
+def test_castor_block_models(
+    xp, dev, scanner_class, faces, crystals, radius, trans_pitch, axial_pitch
+):
+    scanner = scanner_class(xp, dev, model="castor_blocks")
+    assert scanner.model == "castor_blocks"
+    assert scanner.num_sides == faces
+    positions = parallelproj.to_numpy_array(scanner.all_lor_endpoints[:crystals])
+    np.testing.assert_allclose(positions[:, 1], -radius, atol=1e-4)
+    np.testing.assert_allclose(np.diff(positions[:, 0]), trans_pitch, atol=2e-5)
+    np.testing.assert_allclose(
+        np.diff(parallelproj.to_numpy_array(scanner.ring_positions)),
+        axial_pitch,
+        atol=2e-5,
+    )
+
+
+def test_vereos_crystal_group_gaps(xp, dev):
+    scanner = pps.PhilipsVereosPETScannerGeometry(xp, dev)
+    assert scanner.num_rings == 40
+    assert scanner.num_lor_endpoints_per_ring == 576
+    face = parallelproj.to_numpy_array(scanner.all_lor_endpoints[:32])
+    transverse_steps = np.diff(face[:, 0])
+    axial_steps = np.diff(parallelproj.to_numpy_array(scanner.ring_positions))
+    np.testing.assert_allclose(transverse_steps[7::8], 4.85, atol=2e-5)
+    np.testing.assert_allclose(axial_steps[7::8], 4.85, atol=2e-5)
+    np.testing.assert_allclose(transverse_steps[np.arange(31) % 8 != 7], 4.0, atol=2e-5)
+
+
+def test_mct_block_ring_gaps(xp, dev):
+    scanner = pps.SiemensMCTPETScannerGeometry(xp, dev)
+    steps = np.diff(parallelproj.to_numpy_array(scanner.ring_positions))
+    np.testing.assert_allclose(steps[12::13], 4.017462963 + 4.034925926, atol=3e-5)
+    np.testing.assert_allclose(steps[np.arange(51) % 13 != 12], 4.017462963, atol=3e-5)
+
+
+@pytest.mark.parametrize(
     "scanner_class,kwargs",
     [
         (pps.NeuroLFPETScannerGeometry, {}),
         (pps.SiemensMMRPETScannerGeometry, {}),
         (pps.SiemensMMRPETScannerGeometry, {"model": "cylindrical"}),
         (pps.MedisoAnyScanPETScannerGeometry, {}),
+        (pps.SiemensMCTPETScannerGeometry, {}),
+        (pps.PhilipsVereosPETScannerGeometry, {}),
     ],
 )
 def test_named_scanners_project_through_centre(xp, dev, scanner_class, kwargs):
