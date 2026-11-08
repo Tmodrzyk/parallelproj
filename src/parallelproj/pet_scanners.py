@@ -1099,3 +1099,93 @@ class DemoPETScannerGeometry(RegularPolygonPETScannerGeometry):
             ring_positions=ring_positions,
             symmetry_axis=symmetry_axis,
         )
+
+
+class SAFIRDualRingPETScannerGeometry(RegularPolygonPETScannerGeometry):
+    """STIR's block model of the SAFIR dual-ring prototype.
+
+    The 12 flat detector faces each contain 15 crystals at 2.2 mm pitch.
+    The 16 axial rings comprise two blocks of eight crystals, with a
+    18.1 mm centre-to-centre block spacing. The detector plane is at
+    64.05 + 5 mm, including STIR's average depth of interaction.
+
+    Parameters are from STIR's ``SAFIRDualRingPrototype`` definition:
+    https://github.com/UCL/STIR/blob/rel_6.4.0/src/buildblock/Scanner.cxx
+    Coordinates are centred axially, in mm. The default orientation and
+    endpoint numbering follow parallelproj, not STIR's detector map.
+    """
+
+    def __init__(self, xp: ModuleType, dev: str, symmetry_axis: int = 2) -> None:
+        ring_indices = xp.arange(16, device=dev)
+        rings = (
+            2.2 * xp.astype(ring_indices % 8, xp.float32)
+            + 18.1 * xp.astype(ring_indices // 8, xp.float32)
+            - 16.75
+        )
+        super().__init__(
+            xp,
+            dev,
+            radius=69.05,
+            num_sides=12,
+            num_lor_endpoints_per_side=15,
+            lor_spacing=2.2,
+            ring_positions=rings,
+            symmetry_axis=symmetry_axis,
+        )
+
+
+class SiemensMMRPETScannerGeometry(RegularPolygonPETScannerGeometry):
+    """STIR's idealized cylindrical Siemens Biograph mMR model.
+
+    There are 64 rings of 504 positions each, including one virtual position
+    per group of nine. The effective radius is 328 + 7 mm and the axial
+    pitch is 4.0625 mm. All positions lie on a circle; this is STIR's
+    cylindrical approximation, not a physical flat-block crystal model.
+
+    Parameters are from https://github.com/UCL/STIR/blob/rel_6.4.0/src/buildblock/Scanner.cxx.
+    Positions are centred axially, in mm. Virtual positions are included and
+    are not masked; detector numbering and orientation follow parallelproj and
+    are not a direct mapping to STIR sinogram bins.
+    """
+
+    def __init__(self, xp: ModuleType, dev: str, symmetry_axis: int = 2) -> None:
+        rings = 4.0625 * (xp.arange(64, device=dev, dtype=xp.float32) - 31.5)
+        super().__init__(
+            xp,
+            dev,
+            radius=335.0,
+            num_sides=504,
+            num_lor_endpoints_per_side=1,
+            lor_spacing=0.0,
+            ring_positions=rings,
+            symmetry_axis=symmetry_axis,
+        )
+
+
+class SiemensVision600PETScannerGeometry(RegularPolygonPETScannerGeometry):
+    """STIR's idealized cylindrical Siemens Biograph Vision 600 model.
+
+    There are 80 rings of 798 positions each, including one virtual position
+    per group of 21. The effective radius is 410 + 7 mm and the axial
+    pitch is 3.29114 mm. All positions lie on a circle; this is STIR's
+    cylindrical approximation, not a physical flat-block crystal model.
+
+    Parameters are from https://github.com/UCL/STIR/blob/rel_6.4.0/src/buildblock/Scanner.cxx.
+    Positions are centred axially, in mm. Virtual positions are included and
+    are not masked; detector numbering and orientation follow parallelproj and
+    are not a direct mapping to STIR sinogram bins. STIR's intrinsic view
+    offset is a projection-data convention and is not applied here.
+    """
+
+    def __init__(self, xp: ModuleType, dev: str, symmetry_axis: int = 2) -> None:
+        rings = 3.29114 * (xp.arange(80, device=dev, dtype=xp.float32) - 39.5)
+        super().__init__(
+            xp,
+            dev,
+            radius=417.0,
+            num_sides=798,
+            num_lor_endpoints_per_side=1,
+            lor_spacing=0.0,
+            ring_positions=rings,
+            symmetry_axis=symmetry_axis,
+        )
