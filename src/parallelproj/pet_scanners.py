@@ -1047,6 +1047,30 @@ class RegularPolygonPETScannerGeometry(ModularizedPETScannerGeometry):
         """the ring (regular polygon) positions"""
         return self._ring_positions
 
+    @property
+    def virtual_lor_endpoint_mask(self) -> Array:
+        """Boolean mask of virtual positions within one ring.
+
+        This follows this geometry's endpoint order, which is not necessarily
+        the index convention of an external sinogram. Generic geometries
+        have no virtual positions unless a subclass specifies them. Applying
+        the mask to compressed or view-mashed data requires the contributing
+        detector pairs, not just a mask per output bin.
+        """
+        indices = self.xp.arange(self.num_lor_endpoints_per_ring, device=self.dev)
+        period = getattr(self, "_virtual_endpoint_period", None)
+        if period is None:
+            return self.xp.zeros(indices.shape, dtype=self.xp.bool, device=self.dev)
+        return indices % period == 0
+
+    @property
+    def all_virtual_lor_endpoint_mask(self) -> Array:
+        """Boolean virtual-position mask in flattened endpoint order."""
+        indices = self.xp.arange(self.num_lor_endpoints, device=self.dev)
+        return self.xp.take(
+            self.virtual_lor_endpoint_mask, indices % self.num_lor_endpoints_per_ring
+        )
+
 
 class DemoPETScannerGeometry(RegularPolygonPETScannerGeometry):
     """Demo PET scanner geometry consisting of a 34-ogon with 16 LOR endpoints per side and 36 rings"""
@@ -1135,26 +1159,129 @@ class SAFIRDualRingPETScannerGeometry(RegularPolygonPETScannerGeometry):
 
 
 class SiemensMMRPETScannerGeometry(RegularPolygonPETScannerGeometry):
-    """STIR's idealized cylindrical Siemens Biograph mMR model.
+    """Siemens Biograph mMR endpoint geometry.
 
-    There are 64 rings of 504 positions each, including one virtual position
-    per group of nine. The effective radius is 328 + 7 mm and the axial
-    pitch is 4.0625 mm. All positions lie on a circle; this is STIR's
-    cylindrical approximation, not a physical flat-block crystal model.
+    ``model="blocks"`` (default) uses 56 flat faces with eight physical
+    crystals at 4 mm pitch, and 64 rings. ``model="cylindrical"`` uses
+    STIR's 504 equally spaced positions per ring, including 56 virtual
+    positions. In both cases the effective radius is 328 + 7 mm and the
+    axial pitch is 4.0625 mm. The flat model is an idealized approximation:
+    the interaction depth and detailed gaps are not individually calibrated.
 
-    Parameters are from https://github.com/UCL/STIR/blob/rel_6.4.0/src/buildblock/Scanner.cxx.
-    Positions are centred axially, in mm. Virtual positions are included and
-    are not masked; detector numbering and orientation follow parallelproj and
-    are not a direct mapping to STIR sinogram bins.
+    Sources: https://github.com/UCL/STIR/blob/rel_6.4.0/src/buildblock/Scanner.cxx
+    and https://doi.org/10.1088/1361-6560/ad1cf9. Coordinates are in mm.
+    The virtual mask uses position 0 of each group of nine, matching STIR's
+    mMR gap convention. Neither model provides a mapping to STIR sinogram
+    bins; orientation and endpoint numbering follow parallelproj.
     """
 
-    def __init__(self, xp: ModuleType, dev: str, symmetry_axis: int = 2) -> None:
+    def __init__(
+        self,
+        xp: ModuleType,
+        dev: str,
+        symmetry_axis: int = 2,
+        *,
+        model: str = "blocks",
+    ) -> None:
+        if model not in ("blocks", "cylindrical"):
+            raise ValueError("model must be 'blocks' or 'cylindrical'")
+        self._virtual_endpoint_period = 9 if model == "cylindrical" else None
+        self._model = model
         rings = 4.0625 * (xp.arange(64, device=dev, dtype=xp.float32) - 31.5)
         super().__init__(
             xp,
             dev,
             radius=335.0,
-            num_sides=504,
+            num_sides=56 if model == "blocks" else 504,
+            num_lor_endpoints_per_side=8 if model == "blocks" else 1,
+            lor_spacing=4.0 if model == "blocks" else 0.0,
+            ring_positions=rings,
+            symmetry_axis=symmetry_axis,
+        )
+
+    @property
+    def model(self) -> str:
+        """Detector model: ``blocks`` or ``cylindrical``."""
+        return self._model
+
+
+class SiemensVision600PETScannerGeometry(RegularPolygonPETScannerGeometry):
+    """Siemens Biograph Vision 600 endpoint geometry.
+
+    ``model="blocks"`` (default) uses 38 flat faces with 20 physical
+    crystals at an approximate 3.2 mm pitch, and 80 rings.
+    ``model="cylindrical"`` uses STIR's 798 equally spaced positions,
+    including 38 virtual positions per ring. In both cases the effective
+    radius is 410 + 7 mm and the axial pitch is 3.29114 mm. The flat model
+    approximates the physical block layout at a single interaction depth.
+
+    Sources: https://github.com/UCL/STIR/blob/rel_6.4.0/src/buildblock/Scanner.cxx
+    and https://pmc.ncbi.nlm.nih.gov/articles/PMC12664451/. Coordinates are
+    in mm. For the cylindrical model, the virtual mask places a placeholder
+    at position 0 of each group of 21 in parallelproj's own convention. Its
+    phase relative to a particular STIR/vendor dataset has not been verified.
+    Neither model maps directly to STIR sinogram bins; STIR's view offset is
+    not applied here.
+    """
+
+    def __init__(
+        self,
+        xp: ModuleType,
+        dev: str,
+        symmetry_axis: int = 2,
+        *,
+        model: str = "blocks",
+    ) -> None:
+        if model not in ("blocks", "cylindrical"):
+            raise ValueError("model must be 'blocks' or 'cylindrical'")
+        self._virtual_endpoint_period = 21 if model == "cylindrical" else None
+        self._model = model
+        rings = 3.29114 * (xp.arange(80, device=dev, dtype=xp.float32) - 39.5)
+        super().__init__(
+            xp,
+            dev,
+            radius=417.0,
+            num_sides=38 if model == "blocks" else 798,
+            num_lor_endpoints_per_side=20 if model == "blocks" else 1,
+            lor_spacing=3.2 if model == "blocks" else 0.0,
+            ring_positions=rings,
+            symmetry_axis=symmetry_axis,
+        )
+
+    @property
+    def model(self) -> str:
+        """Detector model: ``blocks`` or ``cylindrical``."""
+        return self._model
+
+
+class GEDiscoveryMIPETScannerGeometry(RegularPolygonPETScannerGeometry):
+    """STIR cylindrical geometry for the GE Discovery MI scanner.
+
+    The 3- and 4-block-ring PETRIC2 variants have 27 or 36 crystal rings,
+    respectively, with 544 detector positions per ring. STIR's effective
+    radius is 380.5 mm and its axial pitch is 5.52296 mm. The flat-block
+    detector geometry cannot be inferred from these cylindrical headers.
+    See https://github.com/UCL/STIR/blob/rel_6.4.0/src/buildblock/Scanner.cxx.
+    """
+
+    def __init__(
+        self,
+        xp: ModuleType,
+        dev: str,
+        num_block_rings: int = 4,
+        symmetry_axis: int = 2,
+    ) -> None:
+        if num_block_rings not in (3, 4, 5, 6):
+            raise ValueError("num_block_rings must be 3, 4, 5, or 6")
+        num_rings = 9 * num_block_rings
+        rings = 5.52296 * (
+            xp.arange(num_rings, device=dev, dtype=xp.float32) - (num_rings - 1) / 2
+        )
+        super().__init__(
+            xp,
+            dev,
+            radius=380.5,
+            num_sides=544,
             num_lor_endpoints_per_side=1,
             lor_spacing=0.0,
             ring_positions=rings,
@@ -1162,30 +1289,91 @@ class SiemensMMRPETScannerGeometry(RegularPolygonPETScannerGeometry):
         )
 
 
-class SiemensVision600PETScannerGeometry(RegularPolygonPETScannerGeometry):
-    """STIR's idealized cylindrical Siemens Biograph Vision 600 model.
+class GEDiscovery690PETScannerGeometry(RegularPolygonPETScannerGeometry):
+    """STIR cylindrical geometry for the GE Discovery 690/710.
 
-    There are 80 rings of 798 positions each, including one virtual position
-    per group of 21. The effective radius is 410 + 7 mm and the axial
-    pitch is 3.29114 mm. All positions lie on a circle; this is STIR's
-    cylindrical approximation, not a physical flat-block crystal model.
-
-    Parameters are from https://github.com/UCL/STIR/blob/rel_6.4.0/src/buildblock/Scanner.cxx.
-    Positions are centred axially, in mm. Virtual positions are included and
-    are not masked; detector numbering and orientation follow parallelproj and
-    are not a direct mapping to STIR sinogram bins. STIR's intrinsic view
-    offset is a projection-data convention and is not applied here.
+    STIR and PETRIC2 describe 24 rings, 576 positions per ring, an effective
+    radius of 405.1 + 9.4 mm and an axial pitch of 6.54 mm. Flat-block
+    crystal spacing is not specified by the PETRIC2 cylindrical header.
+    See https://github.com/UCL/STIR/blob/rel_6.4.0/src/buildblock/Scanner.cxx.
     """
 
     def __init__(self, xp: ModuleType, dev: str, symmetry_axis: int = 2) -> None:
-        rings = 3.29114 * (xp.arange(80, device=dev, dtype=xp.float32) - 39.5)
+        rings = 6.54 * (xp.arange(24, device=dev, dtype=xp.float32) - 11.5)
         super().__init__(
             xp,
             dev,
-            radius=417.0,
-            num_sides=798,
+            radius=414.5,
+            num_sides=576,
             num_lor_endpoints_per_side=1,
             lor_spacing=0.0,
+            ring_positions=rings,
+            symmetry_axis=symmetry_axis,
+        )
+
+
+class MedisoAnyScanPETScannerGeometry(RegularPolygonPETScannerGeometry):
+    """Cylindrical geometry from PETRIC2's Mediso AnyScan SCP header.
+
+    This model has 38 rings, 648 positions per ring, a 424 + 6 mm effective
+    radius, and 3.9 mm ring spacing. The header describes a cylindrical
+    reconstruction geometry and does not provide physical block spacing.
+    See https://petric.tomography.stfc.ac.uk/2/data/files/Mediso_NEMA_IQ/prompts.hs.
+    """
+
+    def __init__(self, xp: ModuleType, dev: str, symmetry_axis: int = 2) -> None:
+        rings = 3.9 * (xp.arange(38, device=dev, dtype=xp.float32) - 18.5)
+        super().__init__(
+            xp,
+            dev,
+            radius=430.0,
+            num_sides=648,
+            num_lor_endpoints_per_side=1,
+            lor_spacing=0.0,
+            ring_positions=rings,
+            symmetry_axis=symmetry_axis,
+        )
+
+
+class NeuroLFPETScannerGeometry(RegularPolygonPETScannerGeometry):
+    """PETRIC2 NeuroLF 15 mm block geometry.
+
+    Eight flat detector faces each have four 8-crystal blocks; six axial
+    blocks of eight crystals form 48 rings. Both crystal pitches are 3.313 mm
+    and both block pitches are 27.36 mm. The default inner radius of 135.5 mm
+    and mean interaction depth of 8.26007 mm follow the Esser header and
+    STIR example. The PETRIC2 Hoffman header instead gives 134 mm for the
+    inner radius; use ``inner_radius=134.0`` for that geometry. All lengths
+    are in mm. Endpoint numbering/orientation are parallelproj conventions.
+
+    Source: https://github.com/UCL/STIR/blob/614b80c2762f2b270a8e80a793119113c18e6f31/examples/python/NeuroLF_reconstruction_example/stir_data_generation.py
+    """
+
+    def __init__(
+        self,
+        xp: ModuleType,
+        dev: str,
+        symmetry_axis: int = 2,
+        *,
+        inner_radius: float = 135.5,
+        average_depth_of_interaction: float = 8.26007,
+    ) -> None:
+        indices = xp.arange(48, device=dev)
+        rings = 27.36 * xp.astype(indices // 8, xp.float32) + 3.313 * xp.astype(
+            indices % 8, xp.float32
+        )
+        rings = rings - (5 * 27.36 + 7 * 3.313) / 2
+        indices = xp.arange(32, device=dev)
+        positions = 27.36 * xp.astype(indices // 8, xp.float32) + 3.313 * xp.astype(
+            indices % 8, xp.float32
+        )
+        positions = positions - (3 * 27.36 + 7 * 3.313) / 2
+        super().__init__(
+            xp,
+            dev,
+            radius=inner_radius + average_depth_of_interaction,
+            num_sides=8,
+            lor_endpoint_positions=positions,
             ring_positions=rings,
             symmetry_axis=symmetry_axis,
         )
