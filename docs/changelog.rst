@@ -4,6 +4,14 @@ Changelog
 2.x
 ---
 
+Unreleased
+^^^^^^^^^^
+
+New features
+~~~~~~~~~~~~
+
+- Add several PET scanner geometry presets from Siemens, GE, Mediso, Philips and United Imaging in `pet_scanners.py`. 
+
 2.0.2 (Jul 29, 2026)
 ^^^^^^^^^^^^^^^^^^^^
 

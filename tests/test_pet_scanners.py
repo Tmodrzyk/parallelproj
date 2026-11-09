@@ -11,6 +11,26 @@ from types import ModuleType
 from .config import pytestmark
 
 
+def test_siemens_mct_block_ring_spacing(xp: ModuleType, dev: str) -> None:
+    scanner = pps.SiemensMCTPETScannerGeometry(xp, dev, model="blocks")
+    positions = scanner.ring_positions
+    assert scanner.num_rings == 52
+    assert scanner.num_lor_endpoints_per_ring == 624
+    assert scanner.radius == pytest.approx(438.0)
+    assert scanner.lor_spacing == pytest.approx(4.0)
+
+    # OpenGATE places 13 crystals at 4 mm pitch in each of four rings,
+    # with the centres of consecutive block rings separated by 56 mm.
+    for index in (0, 13, 26, 39):
+        assert float(positions[index + 1] - positions[index]) == pytest.approx(
+            4.0, abs=2e-5
+        )
+    for index in (12, 25, 38):
+        assert float(positions[index + 1] - positions[index]) == pytest.approx(
+            8.0, abs=2e-5
+        )
+
+
 def test_regular_polygon_pet_module(xp: ModuleType, dev: str) -> None:
     radius = 700.0
     num_sides = 28
